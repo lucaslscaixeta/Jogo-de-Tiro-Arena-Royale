@@ -972,6 +972,123 @@
         }
         function moverEntidade(entidade, movX, movY) { let nX = entidade.x + movX; let nY = entidade.y + movY; let canX = true; let canY = true; for (let w of walls) { if (checkCollision({ x: nX, y: entidade.y, radius: entidade.radius }, w)) canX = false; } for (let w of walls) { if (checkCollision({ x: entidade.x, y: nY, radius: entidade.radius }, w)) canY = false; } if (nX < entidade.radius || nX > arena.width - entidade.radius) canX = false; if (nY < entidade.radius || nY > arena.height - entidade.radius) canY = false; if (canX) entidade.x = nX; if (canY) entidade.y = nY; }
 
+        function getMaxHpEntidade(ent) {
+            if (ent.maxHp) return ent.maxHp;
+            if (ent.id === "player") return inventario.tita ? 150 : 100;
+            if (ent.id && ent.id.startsWith("ally")) return 150;
+            return 100;
+        }
+
+        // IA heurística — avalia o ambiente e escolhe a melhor ação do bot
+        function avaliarAcaoHeuristicaBot(bot, alvoM, menorD, visaoLimpa) {
+            const maxHpBot = getMaxHpEntidade(bot);
+            const vidaPercentual = bot.hp / maxHpBot;
+            const dBC = Math.hypot(bot.x - 750, bot.y - 750);
+            const foraZona = modoJogo !== 'boss' && dBC > safeZone.radius - 80;
+
+            let caixaUtil = null;
+            let distCaixa = Infinity;
+            caixas.forEach(cx => {
+                if (!temParede(bot.x, bot.y, cx.x, cx.y)) {
+                    let d = Math.hypot(cx.x - bot.x, cx.y - bot.y);
+                    if (vidaPercentual < 0.5 && cx.tipo === "vida" && d < distCaixa) {
+                        caixaUtil = cx;
+                        distCaixa = d;
+                    }
+                }
+            });
+            if (!caixaUtil) {
+                caixas.forEach(cx => {
+                    let d = Math.hypot(cx.x - bot.x, cx.y - bot.y);
+                    if (d < distCaixa && d < 300 && !temParede(bot.x, bot.y, cx.x, cx.y)) {
+                        caixaUtil = cx;
+                        distCaixa = d;
+                    }
+                });
+            }
+
+            const scores = {
+                VOLTAR_ZONA: 0,
+                BUSCAR_CAIXA: 0,
+                FUGIR: 0,
+                ATACAR: 0,
+                PATRULHAR: 15
+            };
+
+            if (foraZona) {
+                scores.VOLTAR_ZONA = 90 + Math.max(0, dBC - safeZone.radius);
+            }
+
+            if (caixaUtil) {
+                scores.BUSCAR_CAIXA = 25;
+                if (vidaPercentual < 0.5) scores.BUSCAR_CAIXA += 70 * (1 - vidaPercentual);
+                if (caixaUtil.tipo === "vida") scores.BUSCAR_CAIXA += 20;
+                scores.BUSCAR_CAIXA += Math.max(0, 30 - distCaixa * 0.08);
+            }
+
+            if (alvoM && visaoLimpa) {
+                const vidaInimigoPct = alvoM.hp / getMaxHpEntidade(alvoM);
+                const poderBot = bot.hp + (bot.armor || 0) + bot.damage;
+                const poderInimigo = alvoM.hp + (alvoM.armor || 0) + (alvoM.damage || 10);
+                const vantagem = poderBot - poderInimigo;
+
+                let inimigosProximos = 0;
+                if (player.hp > 0 && player.teamId !== bot.teamId && Math.hypot(player.x - bot.x, player.y - bot.y) < 220) inimigosProximos++;
+                bots.forEach(o => {
+                    if (o !== bot && o.hp > 0 && o.teamId !== bot.teamId && Math.hypot(o.x - bot.x, o.y - bot.y) < 220) inimigosProximos++;
+                });
+
+                if (menorD < 400) {
+                    scores.ATACAR = 35;
+                    if (vidaInimigoPct < 0.4 && menorD < 280) scores.ATACAR += 45;
+                    if (vantagem > 20) scores.ATACAR += 25;
+                    if (menorD < 180 && vantagem > 0) scores.ATACAR += 15;
+                }
+
+                if (vidaPercentual < 0.35 && menorD < 250) {
+                    scores.FUGIR = 50 + (1 - vidaPercentual) * 40;
+                }
+                if (vantagem < -25 && menorD < 220) {
+                    scores.FUGIR += 45;
+                }
+                if (inimigosProximos >= 2 && vidaPercentual < 0.55) {
+                    scores.FUGIR += 35;
+                }
+                if (scores.FUGIR > scores.ATACAR && scores.FUGIR > 40) {
+                    scores.ATACAR *= 0.5;
+                }
+            }
+
+            let melhorAcao = "PATRULHAR";
+            let melhorScore = scores.PATRULHAR;
+            for (let acao in scores) {
+                if (scores[acao] > melhorScore) {
+                    melhorScore = scores[acao];
+                    melhorAcao = acao;
+                }
+            }
+
+            let alvo = null;
+            let distancia = Infinity;
+            switch (melhorAcao) {
+                case "VOLTAR_ZONA":
+                    alvo = { x: 750, y: 750 };
+                    distancia = dBC;
+                    break;
+                case "BUSCAR_CAIXA":
+                    alvo = caixaUtil;
+                    distancia = distCaixa;
+                    break;
+                case "FUGIR":
+                case "ATACAR":
+                    alvo = alvoM;
+                    distancia = menorD;
+                    break;
+            }
+
+            return { acao: melhorAcao, alvo, distancia };
+        }
+
         function update() {
             if (gameState === "MENU" || gameState === "GAMEOVER") return; 
             let now = Date.now(); 
@@ -1042,8 +1159,47 @@
                             bot.lastAttackChange = now;
                         }
                         if (bot.attackState === 0) { if (menorD > 200 || !visaoLimpa) moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); if (visaoLimpa && now - bot.lastShot > bot.shootCooldown) { for(let a = -0.2; a <= 0.2; a += 0.2) { bullets.push({ ownerId: bot.id, teamId: bot.teamId, x: bot.x, y: bot.y, angle: bot.angle + a, speed: 7, damage: bot.damage, skin: "boss" }); } bot.lastShot = now; tocarSom("tiroB"); } } else if (bot.attackState === 1) { if (menorD > 80 || !visaoLimpa) { moverEntidade(bot, Math.cos(bot.angle) * (bot.speed*1.5), Math.sin(bot.angle) * (bot.speed*1.5)); } else if (now - bot.lastShot > 1000) { tocarSom("espada"); slashes.push({x: bot.x, y: bot.y, angle: bot.angle, life: 1.0, radius: 90, skin: "boss"}); [player, ...bots].forEach(o => { if(o.hp > 0 && o.teamId !== bot.teamId && Math.hypot(o.x - bot.x, o.y - bot.y) < 100) { darDano(o, 60, o.x, o.y, true, bot.id); } }); bot.lastShot = now; } } else if (bot.attackState === 2) { if (visaoLimpa && menorD > 100 && menorD < 600 && now - bot.lastShot > 2000) { tocarSom("bomba"); basucas.push({ teamId: bot.teamId, ownerId: bot.id, x: bot.x, y: bot.y, angle: bot.angle, speed: 12, damage: 60 }); bot.lastShot = now; } else if (menorD > 600 || !visaoLimpa) { moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); } } else if (bot.attackState === 3) { if (menorD > 150 || !visaoLimpa) moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); if (visaoLimpa && now - bot.lastShot > 200) { bullets.push({ ownerId: bot.id, teamId: bot.teamId, x: bot.x, y: bot.y, angle: bot.angle + (Math.random()*0.8-0.4), speed: 5, damage: 5, skin: "boss" }); bot.lastShot = now; tocarSom("powerup"); } } } else { if (!bot.patrolPoint || Math.hypot(bot.patrolPoint.x - bot.x, bot.patrolPoint.y - bot.y) < 40) { bot.patrolPoint = getValidSpawn(false, false, 60); } let ang = Math.atan2(bot.patrolPoint.y - bot.y, bot.patrolPoint.x - bot.x); bot.angle = ang; moverEntidade(bot, Math.cos(ang) * bot.speed, Math.sin(ang) * bot.speed); }
-                } else { 
-                    let caixaM = null; let distC = Infinity; caixas.forEach(cx => { let d = Math.hypot(cx.x - bot.x, cx.y - bot.y); if (d < distC) { distC = d; caixaM = cx; } }); let alvoV = alvoM; let indoC = false; let fugindo = false; let distR = menorD; let dBC = Math.hypot(bot.x - 750, bot.y - 750); if (caixaM && distC < 300 && !temParede(bot.x, bot.y, caixaM.x, caixaM.y)) { alvoV = caixaM; indoC = true; distR = distC; } if (modoJogo !== 'boss' && dBC > safeZone.radius - 80) { alvoV = { x: 750, y: 750 }; fugindo = true; distR = dBC; } if (!alvoV) { if (!bot.patrolPoint || Math.hypot(bot.patrolPoint.x - bot.x, bot.patrolPoint.y - bot.y) < 30) { bot.patrolPoint = getValidSpawn(false, false, 20); } alvoV = bot.patrolPoint; distR = Math.hypot(alvoV.x - bot.x, alvoV.y - bot.y); } if (alvoV) { let ang = Math.atan2(alvoV.y - bot.y, alvoV.x - bot.x); bot.angle = ang; if (alvoV === alvoM && !fugindo && !indoC) { if (!visaoLimpa || distR > 250) { moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); } else if (distR < 150) { moverEntidade(bot, -Math.cos(bot.angle) * (bot.speed * 0.8), -Math.sin(bot.angle) * (bot.speed * 0.8)); } else { moverEntidade(bot, Math.cos(bot.angle + (Math.PI/2 * bot.strafeDir)) * bot.speed, Math.sin(bot.angle + (Math.PI/2 * bot.strafeDir)) * bot.speed); } } else { moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); } } if (alvoM && visaoLimpa && now - bot.lastShot > bot.shootCooldown && menorD < 400) { let angleShoot = Math.atan2(alvoM.y - bot.y, alvoM.x - bot.x); bullets.push({ ownerId: bot.id, teamId: bot.teamId, x: bot.x + Math.cos(angleShoot) * 20, y: bot.y + Math.sin(angleShoot) * 20, angle: angleShoot, speed: 7, damage: bot.damage, skin: bot.skin }); bot.lastShot = now; tocarSom("tiroB"); }
+                } else {
+                    let decisao = avaliarAcaoHeuristicaBot(bot, alvoM, menorD, visaoLimpa);
+                    let alvoV = decisao.alvo;
+                    let distR = decisao.distancia;
+                    let modoAcao = decisao.acao;
+
+                    if (!alvoV) {
+                        if (!bot.patrolPoint || Math.hypot(bot.patrolPoint.x - bot.x, bot.patrolPoint.y - bot.y) < 30) {
+                            bot.patrolPoint = getValidSpawn(false, false, 20);
+                        }
+                        alvoV = bot.patrolPoint;
+                        distR = Math.hypot(alvoV.x - bot.x, alvoV.y - bot.y);
+                        modoAcao = "PATRULHAR";
+                    }
+
+                    if (alvoV) {
+                        let ang = Math.atan2(alvoV.y - bot.y, alvoV.x - bot.x);
+                        bot.angle = ang;
+
+                        if (modoAcao === "FUGIR" && alvoM) {
+                            bot.angle = Math.atan2(bot.y - alvoM.y, bot.x - alvoM.x);
+                            moverEntidade(bot, Math.cos(bot.angle) * (bot.speed * 1.2), Math.sin(bot.angle) * (bot.speed * 1.2));
+                        } else if (modoAcao === "ATACAR" && alvoM) {
+                            if (!visaoLimpa || distR > 250) {
+                                moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed);
+                            } else if (distR < 150) {
+                                moverEntidade(bot, -Math.cos(bot.angle) * (bot.speed * 0.8), -Math.sin(bot.angle) * (bot.speed * 0.8));
+                            } else {
+                                moverEntidade(bot, Math.cos(bot.angle + (Math.PI / 2 * bot.strafeDir)) * bot.speed, Math.sin(bot.angle + (Math.PI / 2 * bot.strafeDir)) * bot.speed);
+                            }
+                        } else {
+                            moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed);
+                        }
+                    }
+
+                    if (modoAcao === "ATACAR" && alvoM && visaoLimpa && now - bot.lastShot > bot.shootCooldown && menorD < 400) {
+                        let angleShoot = Math.atan2(alvoM.y - bot.y, alvoM.x - bot.x);
+                        bullets.push({ ownerId: bot.id, teamId: bot.teamId, x: bot.x + Math.cos(angleShoot) * 20, y: bot.y + Math.sin(angleShoot) * 20, angle: angleShoot, speed: 7, damage: bot.damage, skin: bot.skin });
+                        bot.lastShot = now;
+                        tocarSom("tiroB");
+                    }
                 }
                 if (Math.hypot(bot.x - oldX, bot.y - oldY) < bot.speed * 0.2) { bot.stuckCounter = (bot.stuckCounter || 0) + 1; if (bot.stuckCounter > 20) { bot.patrolPoint = getValidSpawn(false, false, bot.isBoss ? 60 : 20); bot.ignoreTargetUntil = now + 1500; bot.stuckCounter = 0; } } else { bot.stuckCounter = 0; }
             }
