@@ -86,17 +86,6 @@ Durante a perseguição, o Titã utiliza:
 
 Essas melhorias tornam o comportamento do Chefão mais estratégico, persistente e desafiador.
 
----
-
-## Tecnologias utilizadas
-
-- HTML5
-- CSS3
-- JavaScript
-- Canvas API
-
----
-
 ## Como executar
 
 Clone o repositório:
