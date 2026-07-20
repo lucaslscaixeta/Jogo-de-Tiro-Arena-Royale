@@ -946,7 +946,7 @@
             bots = []; bullets = []; particles = []; damageTexts = []; bombs = []; explosions = []; slashes = []; basucas = [];
 
             if (modoJogo === 'boss') {
-                for(let i=0; i<3; i++) { let allySpawn = getValidSpawn(false, true, 20); bots.push({ id: "ally" + i, teamId: 1, isBoss: false, x: allySpawn.x, y: allySpawn.y, radius: 15, hp: 150, armor: 100, damage: 25, color: "#2196F3", skin: "padrao", speed: 3.6, shootCooldown: 1000, lastShot: i*150, angle: 0, patrolPoint: null, strafeDir: Math.random() < 0.5 ? 1 : -1, stuckCounter: 0 }); }
+                for(let i=0; i<3; i++) { let allySpawn = getValidSpawn(false, true, 20); bots.push({ id: "ally" + i, teamId: 1, isBoss: false, x: allySpawn.x, y: allySpawn.y, radius: 15, hp: 150, armor: 100, damage: 25, color: "#2196F3", skin: "padrao", speed: 3.6, shootCooldown: 1000, lastShot: i*150, angle: 0, patrolPoint: null, strafeDir: Math.random() < 0.5 ? 1 : -1, stuckCounter: 0, estado: "PATRULHAR", estadoDesde: 0 }); }
                 let bossHp = 800 + (nivelChefeProgresso * 300); let bossSpawn = getValidSpawn(false, false, 60); bots.push({ id: "boss", teamId: 2, isBoss: true, x: bossSpawn.x, y: bossSpawn.y, radius: 40, hp: bossHp, maxHp: bossHp, armor: 0, damage: 20, color: "#900", skin: "boss", speed: 1.8 + (nivelChefeProgresso * 0.05), shootCooldown: 1500 - (nivelChefeProgresso * 50), lastShot: 0, angle: 0, attackState: 0, decisionCooldown: 3000, lastAttackChange: Date.now(), strafeDir: 1, stuckCounter: 0 });
                 caixas = []; 
             } else {
@@ -957,7 +957,7 @@
                     let bColor = "#f44336"; let bSkin = "inimigo"; let bSpeed = botSpeedBase; 
                     if (Math.random() < 0.15) { bColor = "#222"; bSkin = "ninja"; bSpeed += 1.0; } 
                     if (bSkin !== "ninja") { if (modoJogo === 'duo' && bTeamId === 1) { bColor = "#2196F3"; bSkin = "padrao"; } else { bColor = "#f44336"; bSkin = "inimigo"; } }
-                    bots.push({ id: "bot" + i, teamId: bTeamId, isBoss: false, x: spawnPt.x, y: spawnPt.y, radius: 15, hp: 100, armor: Math.random()<0.2?50:0, damage: Math.random()<0.2?20:10, color: bColor, skin: bSkin, speed: bSpeed, shootCooldown: botCooldown, lastShot: i * 150, angle: 0, patrolPoint: null, strafeDir: Math.random() < 0.5 ? 1 : -1, stuckCounter: 0 });
+                    bots.push({ id: "bot" + i, teamId: bTeamId, isBoss: false, x: spawnPt.x, y: spawnPt.y, radius: 15, hp: 100, armor: Math.random()<0.2?50:0, damage: Math.random()<0.2?20:10, color: bColor, skin: bSkin, speed: bSpeed, shootCooldown: botCooldown, lastShot: i * 150, angle: 0, patrolPoint: null, strafeDir: Math.random() < 0.5 ? 1 : -1, stuckCounter: 0, estado: "PATRULHAR", estadoDesde: 0 });
                 }
                 caixas = [ { x: 400, y: 400, size: 24, color: "#FF9800", tipo: "arma" }, { x: 1100, y: 1200, size: 24, color: "#F44336", tipo: "vida" }, { x: 750, y: 450, size: 24, color: "#00BCD4", tipo: "escudo" }, { x: 250, y: 750, size: 24, color: "#FFEB3B", tipo: "velocidade" }, { x: 1100, y: 400, size: 24, color: "#FF9800", tipo: "arma" }, { x: 400, y: 1200, size: 24, color: "#F44336", tipo: "vida" }, { x: 750, y: 1200, size: 24, color: "#00BCD4", tipo: "escudo" }, { x: 1250, y: 750, size: 24, color: "#FFEB3B", tipo: "velocidade" } ];
             }
@@ -1231,6 +1231,12 @@
                 }
             }
 
+            // Persistência de estado (agente com estados - 4.1): o estado atual
+            // recebe um pequeno bônus para evitar oscilações rápidas entre estados
+            if (bot.estado && scores[bot.estado] !== undefined && scores[bot.estado] > 0) {
+                scores[bot.estado] += 12;
+            }
+
             let melhorAcao = "PATRULHAR";
             let melhorScore = scores.PATRULHAR;
             for (let acao in scores) {
@@ -1332,37 +1338,55 @@
                         }
                         if (bot.attackState === 0) { if (menorD > 200 || !visaoLimpa) moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); if (visaoLimpa && now - bot.lastShot > bot.shootCooldown) { for(let a = -0.2; a <= 0.2; a += 0.2) { bullets.push({ ownerId: bot.id, teamId: bot.teamId, x: bot.x, y: bot.y, angle: bot.angle + a, speed: 7, damage: bot.damage, skin: "boss" }); } bot.lastShot = now; tocarSom("tiroB"); } } else if (bot.attackState === 1) { if (menorD > 80 || !visaoLimpa) { moverEntidade(bot, Math.cos(bot.angle) * (bot.speed*1.5), Math.sin(bot.angle) * (bot.speed*1.5)); } else if (now - bot.lastShot > 1000) { tocarSom("espada"); slashes.push({x: bot.x, y: bot.y, angle: bot.angle, life: 1.0, radius: 90, skin: "boss"}); [player, ...bots].forEach(o => { if(o.hp > 0 && o.teamId !== bot.teamId && Math.hypot(o.x - bot.x, o.y - bot.y) < 100) { darDano(o, 60, o.x, o.y, true, bot.id); } }); bot.lastShot = now; } } else if (bot.attackState === 2) { if (visaoLimpa && menorD > 100 && menorD < 600 && now - bot.lastShot > 2000) { tocarSom("bomba"); basucas.push({ teamId: bot.teamId, ownerId: bot.id, x: bot.x, y: bot.y, angle: bot.angle, speed: 12, damage: 60 }); bot.lastShot = now; } else if (menorD > 600 || !visaoLimpa) { moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); } } else if (bot.attackState === 3) { if (menorD > 150 || !visaoLimpa) moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); if (visaoLimpa && now - bot.lastShot > 200) { bullets.push({ ownerId: bot.id, teamId: bot.teamId, x: bot.x, y: bot.y, angle: bot.angle + (Math.random()*0.8-0.4), speed: 5, damage: 5, skin: "boss" }); bot.lastShot = now; tocarSom("powerup"); } } } else { if (!bot.patrolPoint || Math.hypot(bot.patrolPoint.x - bot.x, bot.patrolPoint.y - bot.y) < 40) { bot.patrolPoint = getValidSpawn(false, false, 60); } let ang = Math.atan2(bot.patrolPoint.y - bot.y, bot.patrolPoint.x - bot.x); bot.angle = ang; moverEntidade(bot, Math.cos(ang) * bot.speed, Math.sin(ang) * bot.speed); }
                 } else {
+                    // AGENTE INTELIGENTE COM ESTADOS (4.1)
+                    // A heurística (4.3) avalia o ambiente e propõe a melhor ação;
+                    // o agente transita explicitamente entre estados e executa o
+                    // comportamento do estado atual usando navegação com A* (4.2).
                     let decisao = avaliarAcaoHeuristicaBot(bot, alvoM, menorD, visaoLimpa);
                     let alvoV = decisao.alvo;
                     let distR = decisao.distancia;
-                    let modoAcao = decisao.acao;
 
-                    if (!alvoV) {
+                    // Transição de estado
+                    if (bot.estado !== decisao.acao) {
+                        bot.estado = decisao.acao;
+                        bot.estadoDesde = now;
+                        if (bot.estado !== "FUGIR") { bot.pontoFuga = null; }
+                    }
+                    let modoAcao = bot.estado;
+
+                    // Sem alvo válido para o estado atual → patrulha
+                    if (!alvoV || ((modoAcao === "ATACAR" || modoAcao === "FUGIR") && !alvoM)) {
+                        modoAcao = "PATRULHAR";
+                        bot.estado = "PATRULHAR";
+                    }
+
+                    if (modoAcao === "PATRULHAR") {
                         if (!bot.patrolPoint || Math.hypot(bot.patrolPoint.x - bot.x, bot.patrolPoint.y - bot.y) < 30) {
                             bot.patrolPoint = getValidSpawn(false, false, 20);
                         }
-                        alvoV = bot.patrolPoint;
-                        distR = Math.hypot(alvoV.x - bot.x, alvoV.y - bot.y);
-                        modoAcao = "PATRULHAR";
-                    }
-
-                    if (alvoV) {
-                        let ang = Math.atan2(alvoV.y - bot.y, alvoV.x - bot.x);
-                        bot.angle = ang;
-
-                        if (modoAcao === "FUGIR" && alvoM) {
-                            bot.angle = Math.atan2(bot.y - alvoM.y, bot.x - alvoM.x);
-                            moverEntidade(bot, Math.cos(bot.angle) * (bot.speed * 1.2), Math.sin(bot.angle) * (bot.speed * 1.2));
-                        } else if (modoAcao === "ATACAR" && alvoM) {
-                            if (!visaoLimpa || distR > 250) {
-                                moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed);
-                            } else if (distR < 150) {
-                                moverEntidade(bot, -Math.cos(bot.angle) * (bot.speed * 0.8), -Math.sin(bot.angle) * (bot.speed * 0.8));
-                            } else {
-                                moverEntidade(bot, Math.cos(bot.angle + (Math.PI / 2 * bot.strafeDir)) * bot.speed, Math.sin(bot.angle + (Math.PI / 2 * bot.strafeDir)) * bot.speed);
-                            }
+                        moverBotComAStar(bot, bot.patrolPoint.x, bot.patrolPoint.y);
+                    } else if (modoAcao === "VOLTAR_ZONA") {
+                        moverBotComAStar(bot, 750, 750, 1.1);
+                    } else if (modoAcao === "BUSCAR_CAIXA") {
+                        moverBotComAStar(bot, alvoV.x, alvoV.y);
+                    } else if (modoAcao === "FUGIR") {
+                        if (!bot.pontoFuga || now - (bot.pontoFugaTime || 0) > 900 || Math.hypot(bot.pontoFuga.x - bot.x, bot.pontoFuga.y - bot.y) < 30) {
+                            bot.pontoFuga = calcularPontoFuga(bot, alvoM);
+                            bot.pontoFugaTime = now;
+                        }
+                        moverBotComAStar(bot, bot.pontoFuga.x, bot.pontoFuga.y, 1.2);
+                    } else if (modoAcao === "ATACAR") {
+                        bot.angle = Math.atan2(alvoM.y - bot.y, alvoM.x - bot.x);
+                        if (!visaoLimpa || distR > 250) {
+                            // Persegue o alvo desviando de paredes
+                            moverBotComAStar(bot, alvoM.x, alvoM.y);
+                            bot.angle = Math.atan2(alvoM.y - bot.y, alvoM.x - bot.x);
+                        } else if (distR < 150) {
+                            // Reposicionamento: recua mantendo o alvo na mira
+                            moverEntidade(bot, -Math.cos(bot.angle) * (bot.speed * 0.8), -Math.sin(bot.angle) * (bot.speed * 0.8));
                         } else {
-                            moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed);
+                            // Reposicionamento: movimento lateral durante o combate
+                            moverEntidade(bot, Math.cos(bot.angle + (Math.PI / 2 * bot.strafeDir)) * bot.speed, Math.sin(bot.angle + (Math.PI / 2 * bot.strafeDir)) * bot.speed);
                         }
                     }
 
