@@ -972,6 +972,178 @@
         }
         function moverEntidade(entidade, movX, movY) { let nX = entidade.x + movX; let nY = entidade.y + movY; let canX = true; let canY = true; for (let w of walls) { if (checkCollision({ x: nX, y: entidade.y, radius: entidade.radius }, w)) canX = false; } for (let w of walls) { if (checkCollision({ x: entidade.x, y: nY, radius: entidade.radius }, w)) canY = false; } if (nX < entidade.radius || nX > arena.width - entidade.radius) canX = false; if (nY < entidade.radius || nY > arena.height - entidade.radius) canY = false; if (canX) entidade.x = nX; if (canY) entidade.y = nY; }
 
+        const PATH_CELL_SIZE = 40;
+        const navGrids = {};
+
+        function pontoCaminhavel(x, y, radius) {
+            if (x < radius || x > arena.width - radius || y < radius || y > arena.height - radius) return false;
+            for (let w of walls) {
+                if (checkCollision({ x, y, radius }, w)) return false;
+            }
+            return true;
+        }
+
+        function construirGradeNavegacao(radius = 15) {
+            const cols = Math.ceil(arena.width / PATH_CELL_SIZE);
+            const rows = Math.ceil(arena.height / PATH_CELL_SIZE);
+            const blocked = new Uint8Array(cols * rows);
+            for (let gy = 0; gy < rows; gy++) {
+                for (let gx = 0; gx < cols; gx++) {
+                    const x = gx * PATH_CELL_SIZE + PATH_CELL_SIZE / 2;
+                    const y = gy * PATH_CELL_SIZE + PATH_CELL_SIZE / 2;
+                    if (!pontoCaminhavel(x, y, radius)) blocked[gy * cols + gx] = 1;
+                }
+            }
+            return { cols, rows, blocked, cellSize: PATH_CELL_SIZE, radius };
+        }
+
+        function obterGradeNavegacao(radius = 15) {
+            if (!navGrids[radius]) navGrids[radius] = construirGradeNavegacao(radius);
+            return navGrids[radius];
+        }
+
+        function mundoParaGrade(x, y, grid) {
+            return {
+                gx: Math.max(0, Math.min(grid.cols - 1, Math.floor(x / grid.cellSize))),
+                gy: Math.max(0, Math.min(grid.rows - 1, Math.floor(y / grid.cellSize)))
+            };
+        }
+
+        function gradeParaMundo(gx, gy, grid) {
+            return {
+                x: gx * grid.cellSize + grid.cellSize / 2,
+                y: gy * grid.cellSize + grid.cellSize / 2
+            };
+        }
+
+        function celulaBloqueada(gx, gy, grid) {
+            if (gx < 0 || gy < 0 || gx >= grid.cols || gy >= grid.rows) return true;
+            return grid.blocked[gy * grid.cols + gx] === 1;
+        }
+
+        function encontrarCelulaMaisProxima(x, y, grid) {
+            let { gx, gy } = mundoParaGrade(x, y, grid);
+            if (!celulaBloqueada(gx, gy, grid)) return { gx, gy };
+            for (let r = 1; r <= 20; r++) {
+                for (let dx = -r; dx <= r; dx++) {
+                    for (let dy = -r; dy <= r; dy++) {
+                        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+                        const nx = gx + dx;
+                        const ny = gy + dy;
+                        if (!celulaBloqueada(nx, ny, grid)) return { gx: nx, gy: ny };
+                    }
+                }
+            }
+            return { gx, gy };
+        }
+
+        function buscarCaminhoAStar(startX, startY, goalX, goalY, radius = 15) {
+            const grid = obterGradeNavegacao(radius);
+            const start = encontrarCelulaMaisProxima(startX, startY, grid);
+            const goal = encontrarCelulaMaisProxima(goalX, goalY, grid);
+            const key = (gx, gy) => gy * grid.cols + gx;
+            const h = (gx, gy) => Math.hypot(gx - goal.gx, gy - goal.gy);
+
+            if (start.gx === goal.gx && start.gy === goal.gy) {
+                return [{ x: goalX, y: goalY }];
+            }
+
+            const open = [{ gx: start.gx, gy: start.gy, f: h(start.gx, start.gy) }];
+            const gScore = new Map();
+            const cameFrom = new Map();
+            gScore.set(key(start.gx, start.gy), 0);
+
+            const dirs = [
+                [1, 0], [-1, 0], [0, 1], [0, -1],
+                [1, 1], [1, -1], [-1, 1], [-1, -1]
+            ];
+
+            let iterations = 0;
+            while (open.length > 0 && iterations < 2500) {
+                iterations++;
+                let bestIdx = 0;
+                for (let i = 1; i < open.length; i++) {
+                    if (open[i].f < open[bestIdx].f) bestIdx = i;
+                }
+                const current = open.splice(bestIdx, 1)[0];
+                const ck = key(current.gx, current.gy);
+
+                if (current.gx === goal.gx && current.gy === goal.gy) {
+                    const path = [];
+                    let cur = ck;
+                    while (cameFrom.has(cur)) {
+                        const gx = cur % grid.cols;
+                        const gy = Math.floor(cur / grid.cols);
+                        path.unshift(gradeParaMundo(gx, gy, grid));
+                        cur = cameFrom.get(cur);
+                    }
+                    path.push({ x: goalX, y: goalY });
+                    return path;
+                }
+
+                const curG = gScore.get(ck);
+                for (let [dx, dy] of dirs) {
+                    const ngx = current.gx + dx;
+                    const ngy = current.gy + dy;
+                    if (celulaBloqueada(ngx, ngy, grid)) continue;
+                    if (dx !== 0 && dy !== 0) {
+                        if (celulaBloqueada(current.gx + dx, current.gy, grid) || celulaBloqueada(current.gx, current.gy + dy, grid)) continue;
+                    }
+                    const nk = key(ngx, ngy);
+                    const stepCost = (dx !== 0 && dy !== 0) ? 1.414 : 1;
+                    const tentative = curG + stepCost;
+                    if (tentative < (gScore.get(nk) ?? Infinity)) {
+                        cameFrom.set(nk, ck);
+                        gScore.set(nk, tentative);
+                        open.push({ gx: ngx, gy: ngy, f: tentative + h(ngx, ngy) });
+                    }
+                }
+            }
+            return null;
+        }
+
+        function calcularPontoFuga(bot, ameaca) {
+            const dx = bot.x - ameaca.x;
+            const dy = bot.y - ameaca.y;
+            const dist = Math.hypot(dx, dy) || 1;
+            const fleeDist = 250;
+            let fx = bot.x + (dx / dist) * fleeDist;
+            let fy = bot.y + (dy / dist) * fleeDist;
+            fx = Math.max(bot.radius, Math.min(arena.width - bot.radius, fx));
+            fy = Math.max(bot.radius, Math.min(arena.height - bot.radius, fy));
+            if (pontoCaminhavel(fx, fy, bot.radius)) return { x: fx, y: fy };
+            for (let ang = 0; ang < Math.PI * 2; ang += Math.PI / 8) {
+                let tx = bot.x + Math.cos(ang) * fleeDist;
+                let ty = bot.y + Math.sin(ang) * fleeDist;
+                tx = Math.max(bot.radius, Math.min(arena.width - bot.radius, tx));
+                ty = Math.max(bot.radius, Math.min(arena.height - bot.radius, ty));
+                if (pontoCaminhavel(tx, ty, bot.radius)) return { x: tx, y: ty };
+            }
+            return { x: fx, y: fy };
+        }
+
+        function moverBotComAStar(bot, targetX, targetY, speedMult = 1) {
+            const now = Date.now();
+            const targetMoved = !bot.pathTarget || Math.hypot(targetX - bot.pathTarget.x, targetY - bot.pathTarget.y) > 60;
+            const pathStale = !bot.lastPathTime || now - bot.lastPathTime > 1500;
+            const pathDone = !bot.path || bot.pathIndex >= bot.path.length;
+
+            if (pathDone || targetMoved || pathStale) {
+                bot.path = buscarCaminhoAStar(bot.x, bot.y, targetX, targetY, bot.radius) || [{ x: targetX, y: targetY }];
+                bot.pathIndex = 0;
+                bot.pathTarget = { x: targetX, y: targetY };
+                bot.lastPathTime = now;
+            }
+
+            while (bot.pathIndex < bot.path.length && Math.hypot(bot.path[bot.pathIndex].x - bot.x, bot.path[bot.pathIndex].y - bot.y) < bot.radius + 8) {
+                bot.pathIndex++;
+            }
+
+            const destino = bot.pathIndex < bot.path.length ? bot.path[bot.pathIndex] : { x: targetX, y: targetY };
+            bot.angle = Math.atan2(destino.y - bot.y, destino.x - bot.x);
+            moverEntidade(bot, Math.cos(bot.angle) * bot.speed * speedMult, Math.sin(bot.angle) * bot.speed * speedMult);
+        }
+
         function getMaxHpEntidade(ent) {
             if (ent.maxHp) return ent.maxHp;
             if (ent.id === "player") return inventario.tita ? 150 : 100;
